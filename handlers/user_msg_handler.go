@@ -50,7 +50,7 @@ func (g *UserMessageHandler) ReplyText(msg *openwechat.Message) error {
 	log.Printf("Received User %v Text Msg : %v", sender.NickName, msg.Content)
 
 	// 直接回复预设的消息
-	replyText := "你好！请输入‘开始’以启动数据查询功能，或‘停止’以停止查询功能。"
+	replyText := "你好！"
 	_, err = msg.ReplyText(replyText)
 	if err != nil {
 		log.Printf("response user error: %v \n", err)
