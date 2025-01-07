@@ -13,12 +13,17 @@ import (
 var _ MessageHandlerInterface = (*UserMessageHandler)(nil)
 
 type UserMessageHandler struct {
-	db *sqlx.DB
+	db             *sqlx.DB
+	stopUpdateTask chan bool // 控制任务停止的通道
+	lastTweet      string    // 记录上一次发送的 Tweet 内容
 }
 
 // NewUserMessageHandler 创建私聊处理器
 func NewUserMessageHandler(db *sqlx.DB) MessageHandlerInterface {
-	return &UserMessageHandler{db: db}
+	return &UserMessageHandler{
+		db:             db,
+		stopUpdateTask: make(chan bool), // 初始化停止任务的通道
+	}
 }
 
 // handle 处理消息
@@ -28,6 +33,10 @@ func (g *UserMessageHandler) handle(msg *openwechat.Message) error {
 		if content == "开始" {
 			// 用户发送了“开始”，启动定时任务
 			go g.startTweetUpdateTask(msg)
+			return nil
+		} else if content == "停止" {
+			// 用户发送了“停止”，停止定时任务
+			g.stopUpdateTask <- true
 			return nil
 		}
 		return g.ReplyText(msg)
@@ -41,7 +50,7 @@ func (g *UserMessageHandler) ReplyText(msg *openwechat.Message) error {
 	log.Printf("Received User %v Text Msg : %v", sender.NickName, msg.Content)
 
 	// 直接回复预设的消息
-	replyText := "你好！请输入‘开始’以启动数据查询功能。"
+	replyText := "你好！请输入‘开始’以启动数据查询功能，或‘停止’以停止查询功能。"
 	_, err = msg.ReplyText(replyText)
 	if err != nil {
 		log.Printf("response user error: %v \n", err)
@@ -72,12 +81,23 @@ func (g *UserMessageHandler) startTweetUpdateTask(msg *openwechat.Message) {
 				continue
 			}
 
+			// 判断是否与上一次发送的推文相同，避免重复发送
+			if latestTweet == g.lastTweet {
+				continue
+			}
 			// 回复最新的 Tweet 数据给用户
 			replyText := fmt.Sprintf("最新 Tweet:\n%s", latestTweet)
 			_, err = msg.ReplyText(replyText)
 			if err != nil {
 				log.Printf("回复用户失败：%v", err)
+			} else {
+				// 更新 lastTweet，保存当前发送的推文内容
+				g.lastTweet = latestTweet
 			}
+		case <-g.stopUpdateTask:
+			// 收到停止任务的信号，退出循环
+			log.Printf("User %v stopped the task.", sender.NickName)
+			return
 		}
 	}
 }
