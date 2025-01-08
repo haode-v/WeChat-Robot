@@ -68,8 +68,8 @@ func (g *UserMessageHandler) startTweetUpdateTask(msg *openwechat.Message) {
 	}
 	log.Printf("User %v started the task.", sender.NickName)
 
-	// 定时任务，每隔 5 分钟查询一次
-	ticker := time.NewTicker(5 * time.Minute)
+	// 定时任务，每隔 3 分钟查询一次
+	ticker := time.NewTicker(3 * time.Minute)
 	defer ticker.Stop()
 
 	for {
