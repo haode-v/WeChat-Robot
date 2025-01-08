@@ -14,8 +14,8 @@ var _ MessageHandlerInterface = (*UserMessageHandler)(nil)
 
 type UserMessageHandler struct {
 	db             *sqlx.DB
-	stopUpdateTask chan bool // 控制任务停止的通道
-	lastTweet      string    // 记录上一次发送的 Tweet 内容
+	stopUpdateTask chan bool         // 控制任务停止的通道
+	lastTweets     map[string]string // 记录每个用户的上一次发送的 Tweet 内容
 }
 
 // NewUserMessageHandler 创建私聊处理器
@@ -23,6 +23,7 @@ func NewUserMessageHandler(db *sqlx.DB) MessageHandlerInterface {
 	return &UserMessageHandler{
 		db:             db,
 		stopUpdateTask: make(chan bool), // 初始化停止任务的通道
+		lastTweets:     make(map[string]string),
 	}
 }
 
@@ -74,25 +75,28 @@ func (g *UserMessageHandler) startTweetUpdateTask(msg *openwechat.Message) {
 	for {
 		select {
 		case <-ticker.C:
-			// 查询最新的 Tweet 数据
-			latestTweet, err := g.getLatestTweetFromDB()
+			// 查询所有用户的最新 Tweet 数据
+			latestTweets, err := g.getAllLatestTweetsFromDB()
 			if err != nil {
 				log.Printf("获取最新 Tweets 数据失败: %v", err)
 				continue
 			}
 
-			// 判断是否与上一次发送的推文相同，避免重复发送
-			if latestTweet == g.lastTweet {
-				continue
-			}
-			// 回复最新的 Tweet 数据给用户
-			replyText := fmt.Sprintf("最新 Tweet:\n%s", latestTweet)
-			_, err = msg.ReplyText(replyText)
-			if err != nil {
-				log.Printf("回复用户失败：%v", err)
-			} else {
-				// 更新 lastTweet，保存当前发送的推文内容
-				g.lastTweet = latestTweet
+			for userID, tweetContent := range latestTweets {
+				// 判断是否与上一次发送的推文相同，避免重复发送
+				if g.lastTweets[userID] == tweetContent {
+					continue
+				}
+
+				// 回复最新的 Tweet 数据给用户
+				replyText := fmt.Sprintf("用户 %s 最新 Tweet:\n%s", userID, tweetContent)
+				_, err = msg.ReplyText(replyText)
+				if err != nil {
+					log.Printf("回复用户失败：%v", err)
+				} else {
+					// 更新 lastTweets，保存当前发送的推文内容
+					g.lastTweets[userID] = tweetContent
+				}
 			}
 		case <-g.stopUpdateTask:
 			// 收到停止任务的信号，退出循环
@@ -102,14 +106,32 @@ func (g *UserMessageHandler) startTweetUpdateTask(msg *openwechat.Message) {
 	}
 }
 
-// getLatestTweetFromDB 从数据库中获取最新的 Tweet
-func (g *UserMessageHandler) getLatestTweetFromDB() (string, error) {
-	var tweet string
-	query := "SELECT tweet_content FROM Tweets ORDER BY created_at DESC LIMIT 1"
-	err := g.db.Get(&tweet, query)
+// getAllLatestTweetsFromDB 从数据库中获取每个用户的最新 Tweet
+func (g *UserMessageHandler) getAllLatestTweetsFromDB() (map[string]string, error) {
+	latestTweets := make(map[string]string)
+	query := `
+		SELECT user_id, tweet_content 
+		FROM Tweets 
+		WHERE id IN (
+			SELECT MAX(id) 
+			FROM Tweets 
+			GROUP BY user_id
+		);
+	`
+	rows, err := g.db.Queryx(query)
 	if err != nil {
 		log.Printf("查询数据库失败: %v", err)
-		return "", err
+		return nil, err
 	}
-	return tweet, nil
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID, tweetContent string
+		if err := rows.Scan(&userID, &tweetContent); err != nil {
+			log.Printf("扫描数据库行失败: %v", err)
+			continue
+		}
+		latestTweets[userID] = tweetContent
+	}
+	return latestTweets, nil
 }
